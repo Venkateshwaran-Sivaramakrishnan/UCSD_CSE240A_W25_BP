@@ -12,9 +12,9 @@
 //
 // TODO:Student Information
 //
-const char *studentName = "TODO";
-const char *studentID = "TODO";
-const char *email = "TODO";
+const char *studentName = "Venkateshwaran Sivaramakrishnan";
+const char *studentID = "A69031111";
+const char *email = "vsivaramakrishnan@ucsd.edu";
 
 //------------------------------------//
 //      Predictor Configuration       //
@@ -40,6 +40,16 @@ int verbose;
 uint8_t *bht_gshare;
 uint64_t ghistory;
 
+// tournament
+uint8_t *bht_local;
+uint8_t *bht_global;
+uint8_t *choice_t;
+uint64_t *pht_local;
+uint64_t tghistory;
+int tghistoryBits = 14; // Number of bits used for Global History
+int tlhistoryBits = 14; // Number of bits used for Local History
+int phtIndexBits = 14;
+
 //------------------------------------//
 //        Predictor Functions         //
 //------------------------------------//
@@ -64,7 +74,7 @@ uint8_t gshare_predict(uint32_t pc)
 {
   // get lower ghistoryBits of pc
   uint32_t bht_entries = 1 << ghistoryBits;
-  uint32_t pc_lower_bits = pc & (bht_entries - 1);
+  uint32_t pc_lower_bits = pc & (bht_entries - 1); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint32_t ghistory_lower_bits = ghistory & (bht_entries - 1);
   uint32_t index = pc_lower_bits ^ ghistory_lower_bits;
   switch (bht_gshare[index])
@@ -120,6 +130,232 @@ void cleanup_gshare()
   free(bht_gshare);
 }
 
+// tournament functions
+void init_tournament()
+{
+  int lbht_entries = 1 << tlhistoryBits;
+  int gbht_entries = 1 << tghistoryBits;
+  int pht_entries = 1 << phtIndexBits;
+  bht_local = (uint8_t *)malloc(lbht_entries * sizeof(uint8_t));
+  bht_global = (uint8_t *)malloc(gbht_entries * sizeof(uint8_t));
+  choice_t = (uint8_t *)malloc(gbht_entries * sizeof(uint8_t));
+  pht_local = (uint64_t *)malloc(pht_entries * sizeof(uint64_t)); // Assign more memory than required to play with entry size, but extra bits are masked during access
+  int i = 0;
+  for (i = 0; i < gbht_entries; i++)
+  {
+    bht_global[i] = WN;
+    choice_t[i] = WN;
+  }
+  for (i = 0; i < lbht_entries; i++)
+  {
+    bht_local[i] = WN;
+  }
+  for (i = 0; i < pht_entries; i++)
+  {
+    pht_local[i] = 0;
+  }
+  ghistory = 0;
+}
+
+uint8_t tournament_predict(uint32_t pc)
+{
+  // get lower ghistoryBits of pc
+  // discard last two bits of PC
+  uint32_t pht_entries = 1 << (phtIndexBits + 2);
+  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
+  uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
+  uint8_t localPrediction;
+  uint8_t globalPrediction;
+  uint8_t choice;
+  
+  switch (bht_local[bhtLocalIndex])
+  {
+  case WN:
+    localPrediction = NOTTAKEN;
+    break;
+  case SN:
+    localPrediction = NOTTAKEN;
+    break;
+  case WT:
+    localPrediction = TAKEN;
+    break;
+  case ST:
+    localPrediction = TAKEN;
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    localPrediction = NOTTAKEN;
+    break;
+  }
+
+  switch (bht_global[tghistoryIndex])
+  {
+  case WN:
+    globalPrediction = NOTTAKEN;
+    break;
+  case SN:
+    globalPrediction = NOTTAKEN;
+    break;
+  case WT:
+    globalPrediction = TAKEN;
+    break;
+  case ST:
+    globalPrediction = TAKEN;
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    globalPrediction = NOTTAKEN;
+    break;
+  }
+
+  switch (choice_t[tghistoryIndex])
+  {
+  case WN:
+    choice = NOTTAKEN; // Choose Local Pattern
+    break;
+  case SN:
+    choice = NOTTAKEN; // Choose Local Pattern
+    break;
+  case WT:
+    choice = TAKEN; // Choose Global Pattern
+    break;
+  case ST:
+    choice = TAKEN; // Choose Global Pattern
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    choice = NOTTAKEN;
+    break;
+  }
+
+  switch (choice)
+  {
+  case NOTTAKEN:
+    return localPrediction;
+  case TAKEN:
+    return globalPrediction;
+  default:
+    printf("Warning: Undefined state of entry in CHOICE TABLE!\n");
+    return localPrediction;
+  }
+  
+}
+
+void train_tournament(uint32_t pc, uint8_t outcome)
+{
+  // get lower ghistoryBits of pc
+  // discard last two bits of PC
+  uint32_t pht_entries = 1 << (phtIndexBits + 2);
+  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
+  uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
+  uint8_t localPrediction;
+  uint8_t globalPrediction;
+  uint8_t choice;
+  
+  switch (bht_local[bhtLocalIndex])
+  {
+  case WN:
+    localPrediction = NOTTAKEN;
+    break;
+  case SN:
+    localPrediction = NOTTAKEN;
+    break;
+  case WT:
+    localPrediction = TAKEN;
+    break;
+  case ST:
+    localPrediction = TAKEN;
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    localPrediction = NOTTAKEN;
+    break;
+  }
+
+  switch (bht_global[tghistoryIndex])
+  {
+  case WN:
+    globalPrediction = NOTTAKEN;
+    break;
+  case SN:
+    globalPrediction = NOTTAKEN;
+    break;
+  case WT:
+    globalPrediction = TAKEN;
+    break;
+  case ST:
+    globalPrediction = TAKEN;
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    globalPrediction = NOTTAKEN;
+    break;
+  }
+
+  if ((globalPrediction == outcome) && (localPrediction != outcome) && (choice_t[tghistoryIndex] != ST))
+  {
+    choice_t[tghistoryIndex]++; 
+  }
+
+   if ((globalPrediction != outcome) && (localPrediction == outcome) && (choice_t[tghistoryIndex] != SN))
+  {
+    choice_t[tghistoryIndex]--; 
+  }
+
+  // Update state of entry in bht based on outcome
+  switch (bht_local[bhtLocalIndex])
+  {
+  case WN:
+    bht_local[bhtLocalIndex] = (outcome == TAKEN) ? WT : SN;
+    break;
+  case SN:
+    bht_local[bhtLocalIndex] = (outcome == TAKEN) ? WN : SN;
+    break;
+  case WT:
+    bht_local[bhtLocalIndex] = (outcome == TAKEN) ? ST : WN;
+    break;
+  case ST:
+    bht_local[bhtLocalIndex] = (outcome == TAKEN) ? ST : WT;
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    break;
+  }
+
+  switch (bht_global[tghistoryIndex])
+  {
+  case WN:
+    bht_global[tghistoryIndex] = (outcome == TAKEN) ? WT : SN;
+    break;
+  case SN:
+    bht_global[tghistoryIndex] = (outcome == TAKEN) ? WN : SN;
+    break;
+  case WT:
+    bht_global[tghistoryIndex] = (outcome == TAKEN) ? ST : WN;
+    break;
+  case ST:
+    bht_global[tghistoryIndex] = (outcome == TAKEN) ? ST : WT;
+    break;
+  default:
+    printf("Warning: Undefined state of entry in GSHARE BHT!\n");
+    break;
+  }
+
+  // Update history register
+  pht_local[pc_bits] = ((pht_local[pc_bits] << 1) | outcome) & ((1 << tlhistoryBits) - 1);
+  ghistory = ((ghistory << 1) | outcome) & ((1 << tghistoryBits) - 1);
+}
+
+void cleanup_tournament()
+{
+  free(bht_local);
+  free(bht_global);
+  free(choice_t);
+  free(pht_local);
+}
+
 void init_predictor()
 {
   switch (bpType)
@@ -130,6 +366,7 @@ void init_predictor()
     init_gshare();
     break;
   case TOURNAMENT:
+    init_tournament();
     break;
   case CUSTOM:
     break;
@@ -153,7 +390,7 @@ uint32_t make_prediction(uint32_t pc, uint32_t target, uint32_t direct)
   case GSHARE:
     return gshare_predict(pc);
   case TOURNAMENT:
-    return NOTTAKEN;
+    return tournament_predict(pc);
   case CUSTOM:
     return NOTTAKEN;
   default:
@@ -180,7 +417,7 @@ void train_predictor(uint32_t pc, uint32_t target, uint32_t outcome, uint32_t co
     case GSHARE:
       return train_gshare(pc, outcome);
     case TOURNAMENT:
-      return;
+      return train_tournament(pc, outcome);
     case CUSTOM:
       return;
     default:
