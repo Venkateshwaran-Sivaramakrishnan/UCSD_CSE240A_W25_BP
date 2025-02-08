@@ -154,15 +154,15 @@ void init_tournament()
   {
     pht_local[i] = 0;
   }
-  ghistory = 0;
+  tghistory = 0;
 }
 
 uint8_t tournament_predict(uint32_t pc)
 {
   // get lower ghistoryBits of pc
   // discard last two bits of PC
-  uint32_t pht_entries = 1 << (phtIndexBits);
-  uint32_t pc_bits = (pc & (pht_entries - 1)); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint32_t pht_entries = 1 << (phtIndexBits + 2);
+  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
   uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
   uint8_t localPrediction;
@@ -246,8 +246,8 @@ void train_tournament(uint32_t pc, uint8_t outcome)
 {
   // get lower ghistoryBits of pc
   // discard last two bits of PC
-  uint32_t pht_entries = 1 << (phtIndexBits);
-  uint32_t pc_bits = (pc & (pht_entries - 1)); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint32_t pht_entries = 1 << (phtIndexBits + 2);
+  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
   uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
   uint8_t localPrediction;
