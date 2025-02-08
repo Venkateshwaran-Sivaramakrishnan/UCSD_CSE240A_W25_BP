@@ -46,9 +46,9 @@ uint8_t *bht_global;
 uint8_t *choice_t;
 uint64_t *pht_local;
 uint64_t tghistory;
-int tghistoryBits = 14; // Number of bits used for Global History
-int tlhistoryBits = 14; // Number of bits used for Local History
-int phtIndexBits = 14;
+int tghistoryBits = 17; // Number of bits used for Global History
+int tlhistoryBits = 10; // Number of bits used for Local History
+int phtIndexBits = 10;
 
 //------------------------------------//
 //        Predictor Functions         //
@@ -161,8 +161,8 @@ uint8_t tournament_predict(uint32_t pc)
 {
   // get lower ghistoryBits of pc
   // discard last two bits of PC
-  uint32_t pht_entries = 1 << (phtIndexBits + 2);
-  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint32_t pht_entries = 1 << (phtIndexBits);
+  uint32_t pc_bits = (pc & (pht_entries - 1)); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
   uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
   uint8_t localPrediction;
@@ -246,8 +246,8 @@ void train_tournament(uint32_t pc, uint8_t outcome)
 {
   // get lower ghistoryBits of pc
   // discard last two bits of PC
-  uint32_t pht_entries = 1 << (phtIndexBits + 2);
-  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint32_t pht_entries = 1 << (phtIndexBits);
+  uint32_t pc_bits = (pc & (pht_entries - 1)); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
   uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
   uint8_t localPrediction;
@@ -345,7 +345,7 @@ void train_tournament(uint32_t pc, uint8_t outcome)
 
   // Update history register
   pht_local[pc_bits] = ((pht_local[pc_bits] << 1) | outcome) & ((1 << tlhistoryBits) - 1);
-  ghistory = ((ghistory << 1) | outcome) & ((1 << tghistoryBits) - 1);
+  tghistory = ((tghistory << 1) | outcome) & ((1 << tghistoryBits) - 1);
 }
 
 void cleanup_tournament()
