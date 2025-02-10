@@ -133,6 +133,24 @@ cShiftReg_t *csrIndex;
 cShiftReg_t **csrTag;
 loopTable_t *loopTable;
 
+// custom: piecewise linear
+#define N 8        // Modulo values from 
+#define M 118
+#define H 26       // Global History Length
+#define THETA 76   // (2.14*(h+1))+20.58 training threshold
+
+bool pwGHR[H+1]; // Global History Register
+// 0-Not Taken, 1-taken
+
+int GA[H+1];   // Global Address Register (address % M). Address is shifted into the first position of the array.
+// GHR and GA together give the path history. 
+// Used for predicting the current branch.
+
+int W[N][M][H+1];   // 3D-Matrix indexed by branch address, address of branch in path history, and position in the history
+// Keeps tracks of correlation of every branch
+// Acts as the weights that keeps track of the tendency of branch B to be taken
+// 8-bit signed weights (+127 and -128)
+
 //------------------------------------//
 //        Predictor Functions         //
 //------------------------------------//
@@ -166,6 +184,92 @@ loopTable_t *loopTable;
 //        exit(EXIT_FAILURE);
 //    }
 //}
+
+// piecewise linear
+int boundedIncrement(int data)   // Increment with saturation limits -128 and +127
+{
+  if (data < 127) return data+1; // 8-bit signed max value
+  else return data;
+}
+
+int boundedDecrement(int data)   // Decrement with saturation limits -128 and +127
+{
+  if (data > -128) return data-1; // 8-bit signed min value
+  else return data;
+}
+
+void init_piecewise_linear()
+{
+  pwGHR[0] = 1; // Initialize the first branch in GHR with TAKEN state
+
+  for(uint32_t i = 1; i <= H; i++) pwGHR[i] = 0; // Initialize GHR to NOT TAKEN
+
+  for(uint32_t i = 0; i <= H; i++) GA[i] = 0;  // Initialize Branch Address entries
+
+  for(uint32_t i=0; i<N; i++) // Initialize the weight matrix
+  {
+    for(uint32_t j=0; j<M; j++)
+    {
+      for(uint32_t k=0; k<=H; k++)
+      {  
+        W[i][j][k] = 0;
+      }
+    }
+  }
+}
+
+uint8_t piecewise_linear_predict(uint32_t pc)
+{
+  uint32_t pcIndex = pc % N; // PC modulo N gives compressed PC to index the branch in the weight table
+  // Weight Matrix (W) size is constrained within the hardware budget. Hence the modulo operation to map the PC to the limited matrix dimensions
+
+  int pcWeight = W[pcIndex][0][0];
+
+  for(uint32_t i = 1; i <= H; i++)
+  {
+    if(pwGHR[i] == 1) pcWeight = pcWeight + W[pcIndex][GA[i]][i];
+    else if (pwGHR[i] == 0) pcWeight = pcWeight - W[pcIndex][GA[i]][i];
+  }
+
+  if(pcWeight >= 0) return true; // Positive value favours branch TAKEN
+  else return false; // Negative value favors branch NOT TAKEN
+}
+
+void train_piecewise_linear(uint32_t pc, uint8_t outcome)
+{ 
+  uint32_t pcIndex = pc % N;
+  int pcWeight = W[pcIndex][0][0];
+  uint8_t predDir = piecewise_linear_predict(pc);
+
+  for(uint32_t i = 1; i <= H; i++)
+  {
+    if(pwGHR[i] == 1) pcWeight = pcWeight + W[pcIndex][GA[i]][i];
+    else if (pwGHR[i] == 0) pcWeight = pcWeight - W[pcIndex][GA[i]][i];
+  }
+
+  if(pcWeight < 0) pcWeight = -pcWeight; // To get modulus value (positive) 
+
+  if((outcome != predDir) || (pcWeight < THETA)) // On branch mispredict with weights under threshold, train the weight matrix
+  {
+    if(outcome) W[pcIndex][0][0] = W[pcIndex][0][0] + 1; // Branch TAKEN favors positive enforcement
+    else W[pcIndex][0][0] = W[pcIndex][0][0] - 1; // Branch NOT TAKEN favors negative enforcement
+
+    for(uint32_t i = 1; i <= H; i++)
+    {
+      if(outcome == pwGHR[i]) W[pcIndex][GA[i]][i] = boundedIncrement(W[pcIndex][GA[i]][i]); // Increment Weight Matrix if branch outcome follows Global History
+      else W[pcIndex][GA[i]][i] = boundedDecrement(W[pcIndex][GA[i]][i]); // Decrement Weight Matrix if branch outcome diverges from Global History
+    }
+  }
+  
+  for(uint32_t i = 2; i <= H; i++) // Right shift GHR and GA by 1-bit. Preserve the LSB (0th bias bit). 
+  {
+    pwGHR[i-1] = pwGHR[i];
+    GA[i-1] = GA[i];
+  }
+
+  pwGHR[H] = outcome; // Append the outcome at first position
+  GA[H] = pc % M; // Store hashed (modulo) PC in Global Address Register
+}
 
 // tage functions
 void initializeFoldReg(cShiftReg_t *csr, uint32_t actLength, uint32_t newLength)
@@ -874,7 +978,7 @@ void init_predictor()
     init_tournament();
     break;
   case CUSTOM:
-    init_tage();
+    init_piecewise_linear();
     break;
   default:
     break;
@@ -898,7 +1002,7 @@ uint32_t make_prediction(uint32_t pc, uint32_t target, uint32_t direct)
   case TOURNAMENT:
     return tournament_predict(pc);
   case CUSTOM:
-    return tage_predict(pc);
+    return piecewise_linear_predict(pc);
   default:
     break;
   }
@@ -925,7 +1029,7 @@ void train_predictor(uint32_t pc, uint32_t target, uint32_t outcome, uint32_t co
     case TOURNAMENT:
       return train_tournament(pc, outcome);
     case CUSTOM:
-      return train_tage(pc, outcome);
+      return train_piecewise_linear(pc, outcome);
     default:
       break;
     }
