@@ -9,13 +9,13 @@
 #include <math.h>
 #include "predictor.h"
 #include <bitset>
-#include <execinfo.h>
-#include <signal.h>
-#include <exception>
-#include <iostream>
-#include <csignal>
-#include <cstdlib>
-#include <unistd.h>
+//#include <execinfo.h>
+//#include <signal.h>
+//#include <exception>
+//#include <iostream>
+//#include <csignal>
+//#include <cstdlib>
+//#include <unistd.h>
 
 using namespace std;
 
@@ -125,31 +125,32 @@ cShiftReg_t **csrTag;
 //
 
 // DEBUG: Stack Trace
-void signalHandler(int signal) {
-    if (signal == SIGSEGV) {
-        cerr << "Error: Segmentation fault (SIGSEGV) caught!\n";
+//void signalHandler(int signal) {
+//    if (signal == SIGSEGV) {
+//        cerr << "Error: Segmentation fault (SIGSEGV) caught!\n";
+//
+//        void *array[10];
+//        size_t size = backtrace(array, 10); // Capture stack trace
+//       char **messages = backtrace_symbols(array, size); // Convert to symbols
+//
+//        cerr << "Stack trace:\n";
+//        for (size_t i = 0; i < size; ++i) {
+//            cerr << messages[i] << endl; // Print raw stack trace symbol
+//
+//            // Extract function address
+//            string addr = messages[i];
+//
+//            // Use addr2line to get file name and line number
+//            char command[256];
+//            snprintf(command, sizeof(command), "addr2line -e predictor %p", array[i]);
+//            system(command); // Run addr2line
+//        }
+//
+//       free(messages); // Free memory allocated by backtrace_symbols()
+//        exit(EXIT_FAILURE);
+//    }
+//}
 
-        void *array[10];
-        size_t size = backtrace(array, 10); // Capture stack trace
-        char **messages = backtrace_symbols(array, size); // Convert to symbols
-
-        cerr << "Stack trace:\n";
-        for (size_t i = 0; i < size; ++i) {
-            cerr << messages[i] << endl; // Print raw stack trace symbol
-
-            // Extract function address
-            string addr = messages[i];
-
-            // Use addr2line to get file name and line number
-            char command[256];
-            snprintf(command, sizeof(command), "addr2line -e predictor %p", array[i]);
-            system(command); // Run addr2line
-        }
-
-        free(messages); // Free memory allocated by backtrace_symbols()
-        exit(EXIT_FAILURE);
-    }
-}
 // tage functions
 void initializeFoldReg(cShiftReg_t *csr, uint32_t actLength, uint32_t newLength)
 {
@@ -241,7 +242,7 @@ void init_tage()
 
 uint8_t tage_predict(uint32_t pc)
 {
-	signal(SIGSEGV, signalHandler);
+  //signal(SIGSEGV, signalHandler);
   // get lower ghistoryBits of pc
   uint32_t bimodalIndex = (pc & ((1 << BIMODAL_SIZE) - 1));
   predict.pred = -1;
