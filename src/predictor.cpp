@@ -60,7 +60,7 @@ int tghistoryBits = 17; // Number of bits used for Global History
 int tlhistoryBits = 10; // Number of bits used for Local History
 int phtIndexBits = 10;
 
-// custom: tagei
+// custom: tage
 #define NUM_TAGE_TABLES 12
 #define TAGE_MAX 7 			// 3-bit Tage Predictor
 #define BIMODAL_SIZE 13
@@ -75,6 +75,11 @@ int phtIndexBits = 10;
 #define UBIT_MAX 3
 #define MAX_INSTR_COUNT 18 // 256K Instruction: (1 << 18) yields 262144 instructions
 #define PHR_SIZE 16
+#define LOOP_TABLE_SIZE 10
+#define LOOP_TAG_SIZE 14
+#define LOOP_CTR_MAX 3 // For 2-bit counter
+#define LOOP_AGE_MAX 8
+#define LOOP_COUNT_MAX 14
 
 typedef struct tage {
   uint16_t tag;
@@ -97,6 +102,16 @@ typedef struct shiftReg {
   uint16_t newLength; 
 } cShiftReg_t;
 
+typedef struct loopTable {
+  bool prediction;
+  bool used;
+  uint32_t tag; 
+  uint32_t ctr; // Confidence counter 
+  uint32_t presentIter;
+  uint32_t loopCount;
+  uint32_t age;
+} loopTable_t;
+
 GHIST GHR;
 uint8_t *BHT;
 uint32_t PHR;
@@ -116,6 +131,7 @@ uint64_t count;
 bool toggle;
 cShiftReg_t *csrIndex;
 cShiftReg_t **csrTag;
+loopTable_t *loopTable;
 
 //------------------------------------//
 //        Predictor Functions         //
@@ -164,6 +180,7 @@ void foldReg(cShiftReg_t* csr)
   csr->data = (csr->data << 1) | GHR[0]; // Left-shift the CSR data and append the latest GHR bit to the LSB of CSR
   csr->data = (csr->data) ^ (GHR[csr->actLength] << (csr->actLength % csr->newLength));// Hash the GHR information at actual length with the CSR (one of many techniques from PPM)
   csr->data = (csr->data) ^ ((csr->data & (1 << csr->newLength)) >> csr->newLength); // Preserve any overflows from the previous operation by XORing with LSB of CSR
+  //csr->data = (csr->data) ^ (csr->data >> csr->newLength);
   csr->data = (csr->data) & ((1 << csr->newLength) - 1);
 }
 
@@ -207,6 +224,20 @@ void init_tage()
   csrTag[1] = new cShiftReg_t[NUM_TAGE_TABLES];
   uint32_t tempSize;
 
+  uint32_t loopTableSize = (1 << LOOP_TABLE_SIZE);
+  loopTable = new loopTable_t[loopTableSize];
+
+  for(uint32_t i = 0; i < loopTableSize; i++)
+  {
+    loopTable[i].prediction = false;
+    loopTable[i].used = false;
+    loopTable[i].tag = 0;
+    loopTable[i].ctr = 0;
+    loopTable[i].presentIter = 0;
+    loopTable[i].loopCount = 0;
+    loopTable[i].age = 0; 
+  }
+
   for(int i = 0; i < NUM_TAGE_TABLES; i++)
   {
     tageTableSize[i] = tableSize[i];
@@ -245,11 +276,28 @@ uint8_t tage_predict(uint32_t pc)
   //signal(SIGSEGV, signalHandler);
   // get lower ghistoryBits of pc
   uint32_t bimodalIndex = (pc & ((1 << BIMODAL_SIZE) - 1));
+  uint32_t loopTableIndex = (pc & ((1 << LOOP_TABLE_SIZE) - 1));
+  uint32_t loopTag = (pc >> LOOP_TABLE_SIZE) & ((1 << LOOP_TAG_SIZE) - 1);
   predict.pred = -1;
   predict.alterPred = -1;
   predict.table = NUM_TAGE_TABLES;
   predict.alterTable = NUM_TAGE_TABLES;
   
+  // Loop table prediction
+  if(loopTable[loopTableIndex].tag == loopTag)
+  {
+    if(loopTable[loopTableIndex].loopCount > loopTable[loopTableIndex].presentIter) loopTable[loopTableIndex].prediction = TAKEN; // Loop is taken if iterator is less than total iteration count
+    else if(loopTable[loopTableIndex].loopCount == loopTable[loopTableIndex].presentIter) loopTable[loopTableIndex].prediction = NOTTAKEN; // Loop exit
+
+    if(loopTable[loopTableIndex].ctr == LOOP_CTR_MAX)
+    {
+      loopTable[loopTableIndex].used = true;
+      return loopTable[loopTableIndex].prediction;
+    }
+  }
+
+  loopTable[loopTableIndex].used = false;
+
   for(int i = 0; i < NUM_TAGE_TABLES; i++)
   {
     tageIndex[i] = calIndex(pc, i, tageTableSize[i]);
@@ -318,6 +366,55 @@ void train_tage(uint32_t pc, uint8_t outcome)
   bool steal;
 
   uint32_t predDir = tage_predict(pc);
+  
+  // Loop updation logic
+  uint32_t loopTableIndex = (pc & ((1 << LOOP_TABLE_SIZE) - 1));
+  uint32_t loopTag = (pc >> LOOP_TABLE_SIZE) & ((1 << LOOP_TAG_SIZE) - 1);
+  
+  if((loopTable[loopTableIndex].tag != loopTag) && (loopTable[loopTableIndex].age > 0)) loopTable[loopTableIndex].age--; // In case of Tag Miss in Loop Table
+  else // Indicates both Hit, and Miss-with age equals 0 
+  {
+    if(loopTable[loopTableIndex].age == 0) // In case of old/blank entry for both HIT and MISS cases
+    { 
+      loopTable[loopTableIndex].prediction = false;
+      loopTable[loopTableIndex].tag = loopTag;
+      loopTable[loopTableIndex].ctr = 0;
+      loopTable[loopTableIndex].presentIter = 1;
+      loopTable[loopTableIndex].loopCount = (1 << LOOP_COUNT_MAX) - 1;
+      loopTable[loopTableIndex].age = (1 << LOOP_AGE_MAX) - 1;
+    }
+    else
+    {
+      if(loopTable[loopTableIndex].prediction == outcome) // Correct Prediction
+      {
+        if(loopTable[loopTableIndex].presentIter != loopTable[loopTableIndex].loopCount) loopTable[loopTableIndex].presentIter++; // Increment iteration count when iterator is less than the loop count
+	else if(loopTable[loopTableIndex].presentIter != loopTable[loopTableIndex].loopCount)
+	{
+	  loopTable[loopTableIndex].presentIter = 0; // Reset because of predicted loop exit
+	  if(loopTable[loopTableIndex].ctr < LOOP_CTR_MAX) loopTable[loopTableIndex].ctr++;
+	}	
+      }
+      else // Incorrect Prediction
+      {
+	if(loopTable[loopTableIndex].age == (1 << LOOP_AGE_MAX) - 1)
+	{
+	  loopTable[loopTableIndex].loopCount = loopTable[loopTableIndex].presentIter;
+	  loopTable[loopTableIndex].presentIter = 0;
+	  loopTable[loopTableIndex].ctr = 1;
+	}
+	else
+	{
+	  loopTable[loopTableIndex].prediction = false;
+      	  loopTable[loopTableIndex].tag = 0;
+          loopTable[loopTableIndex].ctr = 0;
+      	  loopTable[loopTableIndex].presentIter = 0;
+      	  loopTable[loopTableIndex].loopCount = 0;
+          loopTable[loopTableIndex].age = 0;
+	}	
+      }  
+    }
+    if(loopTable[loopTableIndex].used) return;
+  } 
 
   if(predict.table < NUM_TAGE_TABLES) // If there is a tag Hit in Tage Tables
   {
@@ -336,7 +433,7 @@ void train_tage(uint32_t pc, uint8_t outcome)
   }
   else
   {
-    prediction = BHT[bimodalIndex];
+   prediction = BHT[bimodalIndex];
    if(outcome && (prediction < BHT_MAX)) BHT[bimodalIndex]++; //Increment the Bimodal counter if prediction is TAKEN
    else if(!outcome && (prediction > 0)) BHT[bimodalIndex]--; // Decrement the Bimodal counter if prediction is NOT TAKEN
   }
@@ -401,8 +498,12 @@ void train_tage(uint32_t pc, uint8_t outcome)
 
   GHR = (GHR << 1);
   PHR = (PHR << 1);
-  if(outcome == TAKEN) GHR.set(0,1);
-  if(pc & 1) PHR = PHR + 1; // On unaligned PC
+  if(outcome == TAKEN) 
+  {
+	  GHR.set(0,1);
+	  PHR = PHR + 1;
+  }
+  //if(pc & 1) PHR = PHR + 1; // On unaligned PC
   PHR = (PHR & ((1 << PHR_SIZE) - 1)); // Apply mask to restrict PHR to it's size
 
   // CSR folding operation
