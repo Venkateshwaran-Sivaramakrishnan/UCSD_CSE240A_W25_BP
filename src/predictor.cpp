@@ -56,9 +56,9 @@ uint8_t *bht_global;
 uint8_t *choice_t;
 uint64_t *pht_local;
 uint64_t tghistory;
-int tghistoryBits = 17; // Number of bits used for Global History
-int tlhistoryBits = 10; // Number of bits used for Local History
-int phtIndexBits = 10;
+int tghistoryBits = 15; // Number of bits used for Global History
+int tlhistoryBits = 15; // Number of bits used for Local History
+int phtIndexBits = 12;
 
 // custom: tage
 #define NUM_TAGE_TABLES 12
@@ -642,7 +642,7 @@ void init_tournament()
   for (i = 0; i < gbht_entries; i++)
   {
     bht_global[i] = WN;
-    choice_t[i] = WN;
+    choice_t[i] = WT;
   }
   for (i = 0; i < lbht_entries; i++)
   {
@@ -659,8 +659,8 @@ uint8_t tournament_predict(uint32_t pc)
 {
   // get lower ghistoryBits of pc
   // discard last two bits of PC
-  uint32_t pht_entries = 1 << (phtIndexBits + 2);
-  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint32_t pht_entries = 1 << (phtIndexBits);
+  uint32_t pc_bits = (pc & (pht_entries - 1)); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
   uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
   uint8_t localPrediction;
@@ -744,12 +744,13 @@ void train_tournament(uint32_t pc, uint8_t outcome)
 {
   // get lower ghistoryBits of pc
   // discard last two bits of PC
-  uint32_t pht_entries = 1 << (phtIndexBits + 2);
-  uint32_t pc_bits = (pc & (pht_entries - 1)) >> 2; // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
+  uint32_t pht_entries = 1 << (phtIndexBits);
+  uint32_t pc_bits = (pc & (pht_entries - 1)); // For a 32-bit Machine we don't care about lower 2-bits assuming an aligned memory
   uint64_t bhtLocalIndex = pht_local[pc_bits] & ((1 << tlhistoryBits) - 1);
   uint64_t tghistoryIndex = tghistory & ((1 << tghistoryBits) - 1); 
   uint8_t localPrediction;
   uint8_t globalPrediction;
+  uint8_t prediction = tournament_predict(pc);
   uint8_t choice;
   
   switch (bht_local[bhtLocalIndex])
@@ -791,15 +792,21 @@ void train_tournament(uint32_t pc, uint8_t outcome)
     globalPrediction = NOTTAKEN;
     break;
   }
-
-  if ((globalPrediction == outcome) && (localPrediction != outcome) && (choice_t[tghistoryIndex] != ST))
+  
+  if (localPrediction != globalPrediction)
   {
-    choice_t[tghistoryIndex]++; 
-  }
-
-   if ((globalPrediction != outcome) && (localPrediction == outcome) && (choice_t[tghistoryIndex] != SN))
-  {
-    choice_t[tghistoryIndex]--; 
+    if(prediction == outcome) // Correct Prediction
+    {
+      if(choice_t[tghistoryIndex] == WN) choice_t[tghistoryIndex] = SN;
+      else if(choice_t[tghistoryIndex] == WT) choice_t[tghistoryIndex] = ST;
+    }
+    else // Incorrect Prediction with other entry as correct
+    {
+      if(choice_t[tghistoryIndex] == ST && globalPrediction != outcome) choice_t[tghistoryIndex] = WT;
+      else if (choice_t[tghistoryIndex] == SN && localPrediction != outcome) choice_t[tghistoryIndex] = WN;
+      else if (choice_t[tghistoryIndex] == WT && globalPrediction != outcome) choice_t[tghistoryIndex] = WN;
+      else if (choice_t[tghistoryIndex] == WN && localPrediction != outcome) choice_t[tghistoryIndex] = WT;      
+    }
   }
 
   // Update state of entry in bht based on outcome
